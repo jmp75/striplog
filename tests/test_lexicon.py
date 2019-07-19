@@ -22,3 +22,13 @@ def test_lexicon():
     fname = "tutorial/lexicon.json"
     l = Lexicon.from_json_file(fname)
     assert l.__repr__() is not ''
+
+
+def test_lexicon_dates():
+    """ slashes in date/time formats are not replaced by 'with'
+    """
+    lexicon = Lexicon.default()
+    s = "SHALE - DEEPENED 01/02/2002"
+    answer = s
+    assert lexicon.expand_abbreviations(s) == answer
+
