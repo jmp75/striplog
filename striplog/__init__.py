@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf 8 -*-
+# -*- coding: utf-8 -*-
 """
 ==================
 striplog
@@ -11,6 +10,7 @@ from .legend import Decor, Legend
 from .position import Position
 from .interval import Interval
 from .striplog import Striplog
+from .markov import Markov_chain
 
 __all__ = ['Lexicon',
            'Component',
@@ -18,7 +18,8 @@ __all__ = ['Lexicon',
            'Legend',
            'Position',
            'Interval',
-           'Striplog']
+           'Striplog',
+           'Markov_chain']
 
 
 __version__ = None

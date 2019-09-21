@@ -1,4 +1,4 @@
-# -*- coding: utf 8 -*-
+# -*- coding: utf-8 -*-
 """
 Helper functions for the striplog package.
 
@@ -18,9 +18,100 @@ from . import defaults
 try:
     from IPython.display import HTML
     ipy = True
-except:
+except ImportError:
     ipy = False
     pass
+
+
+def binary_dilation(arr, p):
+    """
+    1D binary morphology: dilation.
+
+    TODO
+        None of these operators work with 'greyscale' (i.e. non-binary) data.
+        And none of them work with non-boxcar structure elements. They could be
+        easily re-written to be much more general. (They are only here to avoid
+        dependency on SciPy, which probably is not that big a deal, so could
+        just revert to `scipy.morphology`.)
+
+    Args:
+        arr: A binary array (e.g. [1,0,0,1,0]).
+        p: Structuring element length.
+
+    Returns:
+        ndarray
+    """
+    structure = np.ones(int(p))
+    L = len(structure)
+    if L == 1:
+        return arr
+    out = (np.convolve(arr, structure, mode='full') > 0).astype(int)
+    start = L // 2
+
+    # Why is this so complicated??
+    if L % 2:  # if L is odd...
+        end = - (L // 2) if L > 3 else -1
+    else:
+        end = 1 - (L // 2) if L > 3 else None
+
+    return out[start:end]
+
+
+def binary_erosion(arr, p):
+    """
+    1D binary morphology: erosion.
+
+    Args:
+        arr: A binary array (e.g. [1,0,0,1,0]).
+        p: Structuring element length.
+
+    Returns:
+        ndarray
+    """
+    structure = np.ones(int(p))
+    L = len(structure)
+    return (np.convolve(arr, structure, mode='same') >= L).astype(int)
+
+
+def binary_opening(arr, p):
+    """
+    1D binary morphology: opening.
+
+    Args:
+        arr: A binary array (e.g. [1,0,0,1,0]).
+        p: Structuring element length.
+
+    Returns:
+        ndarray
+    """
+    return binary_dilation(binary_erosion(arr, p), p)
+
+
+def binary_closing(arr, p):
+    """
+    1D binary morphology: closing.
+
+    Args:
+        arr: A binary array (e.g. [1,0,0,1,0]).
+        p: Structuring element length.
+
+    Returns:
+        ndarray
+    """
+    return binary_erosion(binary_dilation(arr, p), p)
+
+
+def hollow_matrix(M):
+    """
+    Return hollow matrix (zeros on diagonal).
+
+    Args
+        M (ndarray): a 2D, square array representing a matrix.
+
+    Returns
+        ndarray. The same array with zeros on the diagonal.
+    """
+    return (1 - np.eye(M.shape[0])) * M
 
 
 def inspect_petrel(filename):
@@ -473,3 +564,39 @@ def axis_transform(ax, x, y, xlim=None, ylim=None, inverse=False):
         yout = ydelta2 / ydelta
 
     return xout, yout
+
+
+def add_subplot_axes(ax, rect, axisbg='w'):
+    """
+    Facilitates the addition of a small subplot within another plot.
+    From: http://stackoverflow.com/questions/17458580/
+    embedding-small-plots-inside-subplots-in-matplotlib
+    License: CC-BY-SA
+    Args:
+        ax (axis): A matplotlib axis.
+        rect (list): A rect specifying [left pos, bot pos, width, height]
+    Returns:
+        axis: The sub-axis in the specified position.
+    """
+    def axis_to_fig(axis):
+        fig = axis.figure
+
+        def transform(coord):
+            a = axis.transAxes.transform(coord)
+            return fig.transFigure.inverted().transform(a)
+
+        return transform
+
+    fig = plt.gcf()
+    left, bottom, width, height = rect
+    trans = axis_to_fig(ax)
+    x1, y1 = trans((left, bottom))
+    x2, y2 = trans((left + width, bottom + height))
+    subax = fig.add_axes([x1, y1, x2 - x1, y2 - y1])
+    x_labelsize = subax.get_xticklabels()[0].get_size()
+    y_labelsize = subax.get_yticklabels()[0].get_size()
+    x_labelsize *= rect[2] ** 0.5
+    y_labelsize *= rect[3] ** 0.5
+    subax.xaxis.set_tick_params(labelsize=x_labelsize)
+    subax.yaxis.set_tick_params(labelsize=y_labelsize)
+    return subax

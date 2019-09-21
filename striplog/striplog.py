@@ -1,4 +1,4 @@
-# -*- coding: utf 8 -*-
+# -*- coding: utf-8 -*-
 """
 A striplog is a sequence of intervals.
 
@@ -22,6 +22,7 @@ from .interval import Interval, IntervalError
 from .component import Component
 from .legend import Legend
 from .canstrat import parse_canstrat
+from .markov import Markov_chain
 from . import utils
 from . import templates
 
@@ -47,6 +48,8 @@ class Striplog(object):
             work. Default: 'auto'.
     """
     def __init__(self, list_of_Intervals, source=None, order='auto'):
+
+        list_of_Intervals = deepcopy(list_of_Intervals)
 
         if not list_of_Intervals:
             m = "Cannot create an empty Striplog."
@@ -142,16 +145,6 @@ class Striplog(object):
             del self.__list[key]
         return
 
-    def __insert(self, index, item):
-        if isinstance(item, self.__class__):
-            for i, iv in enumerate(item):
-                self.__list.insert(index+i, iv)
-        elif isinstance(item, Interval):
-            self.__list.insert(index, item)
-            return
-        else:
-            raise StriplogError("You can only insert striplogs or intervals.")
-
     def __len__(self):
         return len(self.__list)
 
@@ -206,6 +199,44 @@ class Striplog(object):
         else:
             raise StriplogError("You can only add striplogs or intervals.")
 
+    def insert(self, index, item):
+        if isinstance(item, self.__class__):
+            for i, iv in enumerate(item):
+                self.__list.insert(index+i, iv)
+        elif isinstance(item, Interval):
+            self.__list.insert(index, item)
+            return
+        else:
+            raise StriplogError("You can only insert striplogs or intervals.")
+
+    def append(self, item):
+        """
+        Implements list-like `append()` method.
+        """
+        if isinstance(item, Interval):
+            self.__list.append(item)
+            return
+        else:
+            m = "You can only append an Interval to a Striplog."
+            raise StriplogError(m)
+
+    def extend(self, item):
+        """
+        Implements list-like `extend()` method.
+        """
+        if isinstance(item, self.__class__):
+            self.__list += item
+            return
+        else:
+            m = "You can only extend a Striplog with another Striplog."
+            raise StriplogError(m)
+
+    def pop(self, index):
+        """
+        Implements list-like `pop()` method.
+        """
+        self.__list.pop(index)
+
     @property
     def start(self):
         """
@@ -215,9 +246,11 @@ class Striplog(object):
             Position.
         """
         if self.order == 'depth':
-            return self[0].top
+            # Too naive if intervals can overlap:
+            # return self[0].top
+            return min(i.top for i in self)
         else:
-            return self[-1].base
+            return min(i.base for i in self)
 
     @property
     def stop(self):
@@ -228,9 +261,9 @@ class Striplog(object):
             Position.
         """
         if self.order == 'depth':
-            return self[-1].base
+            return max(i.base for i in self)
         else:
-            return self[0].top
+            return max(i.top for i in self)
 
     def __sort(self):
         """
@@ -453,7 +486,7 @@ class Striplog(object):
                                  ignore=None,
                                  lexicon=None):
         """
-        Private function. Takes a data dictionary and reconstructs a list
+        Private function. Takes a data dictionary and constructs a list
         of Intervals from it.
 
         Args:
@@ -524,7 +557,9 @@ class Striplog(object):
             if iv:
                 c, d = {}, {}
                 for k, v in iv.items():
-                    if (k[:5].lower() == 'comp ') or (k[:9].lower() == 'component'):
+                    match1 = (k[:9].lower() == 'component')
+                    match2 = (k[:5].lower() == 'comp ')
+                    if match1 or match2:
                         k = re.sub(r'comp(?:onent)? ', '', k, flags=re.I)
                         c[k] = v  # It's a component
                     else:
@@ -562,6 +597,27 @@ class Striplog(object):
                  fieldnames=None):
         """
         Load from a CSV file or text.
+
+        Args
+            filename (str): The filename, or use `text`.
+            text (str): CSV data as a string, or use `filename`.
+            dlm (str): The delimiter, default ','.
+            lexicon (Lexicon): The lexicon to use, optional. Only needed if \
+                parsing descriptions (e.g. cuttings).
+            points (bool): Whether to make a point dataset (as opposed to \
+                ordinary intervals with top and base. Default is False.
+            include: Default is None.
+            exclude: Default is None.
+            remap: Default is None.
+            function: Default is None.
+            null: Default is None.
+            ignore: Default is None.
+            source: Default is None.
+            stop: Default is None.
+            fieldnames: Default is None.
+
+        Returns
+            Striplog. A new instance.
         """
         if (filename is None) and (text is None):
             raise StriplogError("You must provide a filename or CSV text.")
@@ -589,7 +645,9 @@ class Striplog(object):
         reader = csv.DictReader(f, delimiter=dlm)
 
         # Reorganize the data to make fixing it easier.
-        reorg = {k.strip().lower(): [] for k in reader.fieldnames if k is not None}
+        reorg = {k.strip().lower(): []
+                 for k in reader.fieldnames
+                 if k is not None}
         t = f.tell()
         for key in reorg:
             f.seek(t)
@@ -739,7 +797,8 @@ class Striplog(object):
                    source="Image",
                    col_offset=0.1,
                    row_offset=2,
-                   tolerance=0):
+                   tolerance=0,
+                   background=None):
         """
         Read an image and generate Striplog.
 
@@ -756,12 +815,17 @@ class Striplog(object):
             tolerance (float): The Euclidean distance between hex colours,
                 which has a maximum (black to white) of 441.67 in base 10.
                 Default: 0.
+            background (array): A background colour (as hex) to ignore.
 
         Returns:
             Striplog: The ``striplog`` object.
         """
+        if background is None:
+            bg = "#xxxxxx"
+        else:
+            bg = background
         rgb = utils.loglike_from_image(filename, col_offset)
-        loglike = np.array([utils.rgb_to_hex(t) for t in rgb])
+        loglike = np.array([utils.rgb_to_hex(t) for t in rgb if utils.rgb_to_hex(t) != bg])
 
         # Get the pixels and colour values at 'tops' (i.e. changes).
         tops, hexes = utils.tops_from_loglike(loglike, offset=row_offset)
@@ -769,7 +833,7 @@ class Striplog(object):
         # If there are consecutive tops, we assume it's because there is a
         # single-pixel row that we don't want. So take the second one only.
         # We used to do this reduction in ``utils.tops_from_loglike()`` but
-        # it was prventing us from making intervals only one sample thick.
+        # it was preventing us from making intervals only one sample thick.
         nonconsecutive = np.append(np.diff(tops), 2)
         tops = tops[nonconsecutive > 1]
         hexes = hexes[nonconsecutive > 1]
@@ -887,7 +951,7 @@ class Striplog(object):
             Striplog: The ``striplog`` object.
         """
         if (components is None) and (legend is None) and (field is None):
-            m = 'You must provide a list of components, and legend, or a field.'
+            m = 'You must provide a list of components and legend, or a field.'
             raise StriplogError(m)
 
         if (legend is not None) and (legend_field is None):
@@ -1044,7 +1108,8 @@ class Striplog(object):
         """
         if (filename is None):
             if (not as_text):
-                raise StriplogError("You must provide a filename or set as_text to True.")
+                m = "You must provide a filename or set as_text to True."
+                raise StriplogError(m)
         else:
             as_text = False
 
@@ -1069,12 +1134,11 @@ class Striplog(object):
                 text = i.primary.summary()
             else:
                 text = ''
-            data = {j: k for j, k in zip(fieldnames, [i.top.z, i.base.z, text])}
-            writer.writerow(data)
+            d = {j: k for j, k in zip(fieldnames, [i.top.z, i.base.z, text])}
+            writer.writerow(d)
 
         if as_text:
             return output.getvalue()
-            #return output
         else:
             output.close
             return None
@@ -1145,7 +1209,7 @@ class Striplog(object):
                 the Components (e.g. lithology), provide a list of those
                 you want to match.
             undefined (number): What to fill in where no value can be
-                determined, e.g. ``-999.25`` or ``np.null``. Default 0.
+                determined, e.g. ``-999.25`` or ``np.nan``. Default 0.
             return_meta (bool): If ``True``, also return the depth basis
                 (np.linspace), and the component table.
 
@@ -1182,14 +1246,13 @@ class Striplog(object):
 
         # If needed, make a look-up table for the log values.
         if table is None:
-            table = [Component({})]
             if legend:
-                table += [j.component for j in legend]
+                table = [j.component for j in legend]
             elif field:
                 s = set([iv.data.get(field) for iv in self])
-                table = [None] + list(filter(None, s))
+                table = list(filter(None, s))
             else:
-                table += [j[0] for j in self.unique]
+                table = [j[0] for j in self.unique]
 
         # Adjust the table if necessary. Go over all the components in the
         # table list, and remove elements that are not in the match list.
@@ -1197,7 +1260,7 @@ class Striplog(object):
         # be in the original list of components.
         if match_only is not None:
             if not isinstance(match_only, (list, tuple, set,)):
-                raise StriplogError("match_only should be a list, not a string")
+                raise StriplogError("match_only should be type list not str.")
             table_new = []
             for c in table:
                 if c == '':
@@ -1233,12 +1296,12 @@ class Striplog(object):
                 f = field_function or utils.null
                 try:
                     v = f(i.data.get(field, undefined)) or undefined
-                    key = table.index(v)
+                    key = (table.index(v) + 1) or undefined
                 except ValueError:
                     key = undefined
             else:  # Use the lookup table.
                 try:
-                    key = table.index(c) or undefined
+                    key = (table.index(c) + 1) or undefined
                 except ValueError:
                     key = undefined
 
@@ -1419,9 +1482,12 @@ class Striplog(object):
         if colour is not None:
             cmap = cmap or 'viridis'
             p = mpl.collections.PatchCollection(patches, cmap=cmap, lw=lw)
-            p.set_array(self.get_data(colour, colour_function, default=default))
+            p.set_array(self.get_data(colour,
+                                      colour_function,
+                                      default=default
+                                      ))
             ax.add_collection(p)
-            cb = plt.colorbar(p)  #  orientation='horizontal' only really works with ticks=[0, 0.1, 0.2] say
+            cb = plt.colorbar(p)
             cb.outline.set_linewidth(0)
 
         return ax
@@ -1483,7 +1549,7 @@ class Striplog(object):
             None. Unless you specify ``return_fig=True`` or pass in an ``ax``.
         """
         if legend is None:
-                legend = Legend.random(self.components)
+            legend = Legend.random(self.components)
 
         if style.lower() == 'tops':
             # Make sure width is at least 3 for 'tops' style
@@ -1511,7 +1577,8 @@ class Striplog(object):
                                 legend=legend,
                                 ladder=ladder,
                                 default_width=width,
-                                match_only=kwargs.get('match_only', match_only),
+                                match_only=kwargs.get('match_only',
+                                                      match_only),
                                 colour=colour,
                                 cmap=cmap,
                                 default=default,
@@ -1523,7 +1590,10 @@ class Striplog(object):
             ax.set_xticks([])
 
         # Rely on interval order.
-        lower, upper = self[-1].base.z, self[0].top.z
+        if self.order == 'depth':
+            upper, lower = self.start.z, self.stop.z
+        else:
+            upper, lower = self.stop.z, self.start.z
         rng = abs(upper - lower)
 
         ax.set_ylim([lower, upper])
@@ -1569,6 +1639,23 @@ class Striplog(object):
             return fig
         else:
             return
+
+    def shift(self, delta=None, start=None):
+        """
+        Shift all the intervals by `delta` (negative numbers are 'up')
+        or by setting a new start depth.
+
+        Returns a copy of the striplog.
+        """
+        new_strip = self.copy()
+        if delta is None:
+            if start is None:
+                raise StriplogError("You must provide a delta or a new start.")
+            delta = start - self.start.z
+        for iv in new_strip:
+            iv.top = iv.top.z + delta
+            iv.base = iv.base.z + delta
+        return new_strip
 
     def read_at(self, d, index=False):
         """
@@ -1772,15 +1859,25 @@ class Striplog(object):
 
         return strip
 
-    def anneal(self):
+    def anneal(self, mode='middle'):
         """
         Fill in empty intervals by growing from top and base.
 
         Note that this operation happens in-place and destroys any information
         about the ``Position`` (e.g. metadata associated with the top or base).
         See GitHub issue #54.
+
+        If there are overlaps in your striplog, then this method may have
+        unexpected results.
+
+        Args
+            mode (str): One of ['down', 'middle', 'up']. Which way to 'flood'
+                into the gaps.
+
+        Returns
+            Striplog. A new instance of the Striplog class.
         """
-        strip = self.copy()
+        strip = deepcopy(self)
 
         gaps = strip.find_gaps(index=True)
 
@@ -1791,14 +1888,27 @@ class Striplog(object):
             before = strip[gap]
             after = strip[gap + 1]
 
-            if strip.order == 'depth':
-                t = (after.top.z-before.base.z)/2
-                before.base = before.base.z + t
-                after.top = after.top.z - t
-            else:
-                t = (after.base-before.top)/2
-                before.top = before.top.z + t
-                after.base = after.base.z - t
+            if mode == 'middle':
+                if strip.order == 'depth':
+                    t = (after.top.z-before.base.z)/2
+                    before.base = before.base.z + t
+                    after.top = after.top.z - t
+                else:
+                    t = (after.base-before.top)/2
+                    before.top = before.top.z + t
+                    after.base = after.base.z - t
+
+            elif mode == 'down':
+                if strip.order == 'depth':
+                    before.base = after.top.z
+                else:
+                    before.top = after.base.z
+
+            elif mode == 'up':
+                if strip.order == 'depth':
+                    after.top = before.base.z
+                else:
+                    after.base = before.top.z
 
         return strip
 
@@ -1893,7 +2003,7 @@ class Striplog(object):
             new_segment = before.merge(after)
 
             # Insert it.
-            self.__insert(overlap, new_segment)
+            self.insert(overlap, new_segment)
 
             overlaps += 1
 
@@ -2024,8 +2134,8 @@ class Striplog(object):
         """
         # This seems like overkill, but collecting all this stuff gives
         # the user some choice about what they get back.
-        comps = []
-        labels = []
+        comps = {}
+        labels = {}
         entries = defaultdict(int)
         for i in self:
             if lumping:
@@ -2035,12 +2145,15 @@ class Striplog(object):
                     k = i.primary.summary()
                 else:
                     k = i.primary
-            comps.append(i.primary)
-            labels.append(i.primary.summary())
+            comps[k] = i.primary
+            labels[k] = i.primary.summary()
             entries[k] += i.thickness
 
         if sort:
-            allitems = sorted(entries.items(), key=lambda i: i[1], reverse=True)
+            allitems = sorted(entries.items(),
+                              key=lambda i: i[1],
+                              reverse=True
+                              )
             ents, counts = zip(*allitems)
         else:
             ents, counts = tuple(entries.keys()), tuple(entries.values())
@@ -2055,9 +2168,9 @@ class Striplog(object):
             ind = np.arange(len(ents))
             bars = ax.bar(ind, counts, align='center')
             ax.set_xticks(ind)
-            ax.set_xticklabels(labels)
+            ax.set_xticklabels(labels.values())
             if legend:
-                colours = [legend.get_colour(c) for c in comps]
+                colours = [legend.get_colour(c) for c in comps.values()]
                 for b, c in zip(bars, colours):
                     b.set_color(c)
             ax.set_ylabel('Thickness [m]')
@@ -2075,7 +2188,7 @@ class Striplog(object):
             legend=None, ax=None, figsize=None, **kwargs):
         """
         Make a bar plot of thickness per interval.
-        
+
         Args:
             height (str): The property of the primary component to plot.
             sort (bool or function): Either pass a boolean indicating whether
@@ -2086,7 +2199,7 @@ class Striplog(object):
             ax (axis): Optional axis to plot to.
             figsize (tuple): A figure size, (width, height), optional.
             **kwargs: passed to the matplotlib bar plot command, ax.bar().
-            
+
         Returns:
             axis: If you sent an axis in, you get it back.
         """
@@ -2102,20 +2215,20 @@ class Striplog(object):
             fig, ax = plt.subplots(figsize=figsize)
 
         heights = [getattr(i, height) for i in data]
-        
+
         comps = [i[0] for i in self.unique]
-        
+
         if legend is None:
             legend = Legend.random(comps)
-            
+
         colors = [legend.get_colour(i.primary) for i in data]
 
         bars = ax.bar(range(len(data)), height=heights, color=colors, **kwargs)
-        
+
         # Legend.
         colourables = [i.primary.summary() for i in data]
         unique_bars = dict(zip(colourables, bars))
-        ax.legend(unique_bars.values(), unique_bars.keys())
+        ax.legend(list(unique_bars.values()), list(unique_bars.keys()))
 
         ax.set_ylabel(height.title())
 
@@ -2182,6 +2295,29 @@ class Striplog(object):
             self.__list = new_list
             return
 
+    def net_to_gross(strip, attr):
+        """
+        Compute the ratio of intervals having that attribute as `True` to the
+        total thickness.
+
+        TODO
+            Allow user to give a cut-off value to apply to the attribute,
+            if it's a continuous scalar and not boolean.
+
+        Args
+            attr (str): Which attribute to use. Must have boolean values.
+
+        Returns
+            float. The net:gross ratio.
+        """
+        net = non = 0
+        for c, x in strip.unique:
+            if getattr(c, attr):
+                net = x
+            else:
+                non = x
+        return net / (net + non)
+
     def quality(self, tests, alias=None):
         """
         Run a series of tests and return the corresponding results.
@@ -2218,3 +2354,199 @@ class Striplog(object):
 
         return {test.__name__: test(self) for test in this_tests}
 
+    @property
+    def _table(self):
+        """
+        A table (list of tuples) of the tops and bases we encounter, starting
+        at the top. We will need to know 3 things: whether it's a top or a
+        base, the depth it's at, and which interval in the striplog it
+        corresponds to.
+        """
+        table = []
+        for i, interval in enumerate(self):
+            table.append(('T', interval.top.middle, i))
+            table.append(('B', interval.base.middle, i))
+        table = sorted(table, key=lambda x: x[1])
+        return table
+
+    def _merge_table(self, attr, reverse=False):
+        """
+        Do the merge operation on a table, and return a new table with
+        no nesting / overlaps.
+
+        Args
+            attr (str): The attribute of the component you want to use. You
+                must provide an attribute.
+            reverse (bool): Whether to reverse the condition.
+
+        Returns
+            list: The merged table.
+        """
+        merged, stack = [], []
+        op = operator.le if reverse else operator.ge
+
+        for interface in self._table:
+
+            tb, depth, idx = interface
+
+            if stack:
+                # 'this' is the top or base we're on in this loop iteration.
+                try:
+                    this = getattr(self[idx], attr)
+                except AttributeError:
+                    this = getattr(self[idx].primary, attr)
+
+                # 'current' is the highest priority unit in the stack.
+                try:
+                    current = getattr(self[stack[-1]], attr)
+                except AttributeError:
+                    current = getattr(self[stack[-1]].primary, attr)
+
+                # Compare 'this' to 'current' to decide what to do.
+                merge = op(this, current)
+            else:
+                merge = True
+
+            if tb == 'T':
+
+                # If this one meets the condition, merge it.
+                if merge:
+                    # End the current unit, if any.
+                    if stack:
+                        merged.append(('B', depth, stack[-1]))
+                    # Start the new top.
+                    merged.append(interface)
+
+                # Insert this unit into stack and re-sort.
+                # (This is easier than trying to insert in the right place.)
+                stack.append(idx)
+                try:
+                    stack = sorted(stack,
+                                   key=lambda i: getattr(self[i], attr),
+                                   reverse=reverse)
+                except AttributeError:
+                    stack = sorted(stack,
+                                   key=lambda i: getattr(self[i].primary, attr),
+                                   reverse=reverse)
+
+            elif tb == 'B':
+                have_merged = False
+
+                # If this is the current unit's base, append it to the merge.
+                if idx == stack[-1]:
+                    merged.append(interface)
+                    have_merged = True
+
+                # End this unit in the stack.
+                stack.remove(idx)
+
+                # Add a top for the new current unit, if any, but only if we
+                # did a merge.
+                if stack and have_merged:
+                    merged.append(('T', depth, stack[-1]))
+
+        return merged
+
+    def _striplog_from_merge_table(self, table):
+        """
+        Make a merge table into a Striplog instance.
+
+        Args
+            table (list). The table of tops and bases, represented as tuples.
+
+        Returns
+            Striplog. A new Striplog instance.
+        """
+        m = []
+        for top, bot in zip(table[::2], table[1::2]):
+
+            # If zero thickness, discard.
+            if top[1] == bot[1]:
+                continue
+
+            i = self[top[2]].copy()
+            i.top = top[1]
+            i.base = bot[1]
+            m.append(i)
+
+        return Striplog(m)
+
+    def merge(self, attr, reverse=False):
+        """
+        Merge the intervals in a striplog, using an attribute of the primary
+        component for priority ordering.
+
+        Args
+            attr (str): The attribute of the component you want to use. You \
+                must provide an attribute.
+            reverse (bool): Whether to reverse the condition.
+
+        Returns
+            Striplog: The merged striplog.
+        """
+        m = self._merge_table(attr, reverse=reverse)
+        return self._striplog_from_merge_table(m)
+
+    def is_binary(self, attr=None):
+        """
+        Determine if `attr`, which must be an attribute of every primary
+        component, allows this striplog to be interpreted as a binary striplog.
+        If no `attr` is provided, the first attribute of the primary comp-
+        onent is used.
+        """
+        try:
+            primaries = [getattr(i.primary, attr) for i in self]
+        except:
+            primaries = [list(i.primary.__dict__.values())[0] for i in self]
+        return all(map(lambda x: isinstance(x, bool), primaries))
+
+    def to_binary_log(self, attr, step):
+        """
+        Adaptation of `to_log` but deals with binary attributes of striplogs.
+
+        Args
+            attr (str): Which attribute to make into a log.
+        """
+        log, basis, comps = self.to_log(step=step,
+                                        match_only=[attr],
+                                        undefined=-1,
+                                        return_meta=True)
+        if -1 in log:
+            with warnings.catch_warnings():
+                warnings.simplefilter("always")
+                w = "We have undefined values, there might be a problem."
+                warnings.warn(w)
+        return log - 1, basis, comps
+
+    def binary_morphology(self, attr, operation, step=1.0, p=3):
+        """
+        Perform a discrete binary morphology operation on the striplog.
+
+        Args
+            attr (str): The attribute to use for the filtering. Must have
+                boolean values.
+            operation (str): One of `erosion`, `dilation`, `opening` or
+                `closing`.
+            step (float): The step size to use in discretization. Default is
+                1 but you might want to use something smaller, e.g. 0.1.
+            p (int): The length of the structuring element, in samples (not
+                natual units). Odd numbers are symmetrical and more intuitive.
+                Default is 3.
+
+        Returns
+            Striplog. A new striplog instance.
+        """
+        ops = {
+            'erosion': utils.binary_erosion,
+            'dilation': utils.binary_dilation,
+            'opening': utils.binary_opening,
+            'closing': utils.binary_closing,
+        }
+        if not self.is_binary():
+            print("Cannot interpret striplog as binary.")
+        log, basis, comps = self.to_binary_log(step=step, attr=attr)
+        proc = ops[operation](log, p)
+        if operation == 'closing':
+            proc = proc | log
+
+        return Striplog.from_log(proc, components=comps, basis=basis)
